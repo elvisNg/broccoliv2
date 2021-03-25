@@ -12,8 +12,6 @@ import (
 	"github.com/go-redis/redis"
 )
 
-var prom *broccoliprometheus.Prom
-
 const (
 	redisGet    = "redis:get"
 	redisSet    = "redis:set"
@@ -26,14 +24,23 @@ const (
 	OPTION_SUC  = "success"
 )
 
+var (
+	prom       **broccoliprometheus.Prom
+	prometheus = broccoliprometheus.NewProm()
+)
+
 type Client struct {
 	client *redis.Client
 	rw     sync.RWMutex
 }
 
-func InitClientWithProm(cfg *config.Redis, promClient *broccoliprometheus.Prom) *Client {
-	prom = promClient
+func InitClientWithProm(cfg *config.Redis, promClient **broccoliprometheus.Prom) *Client {
 	rds := new(Client)
+
+	if promClient != nil {
+		prom = promClient
+		prometheus = *prom
+	}
 	rds.client = newRedisClient(cfg)
 	return rds
 }
@@ -100,12 +107,12 @@ func (rds *Client) ZGet(key string) *redis.StringCmd {
 	getStartTime := time.Now()
 	result := rds.client.Get(key)
 	if result.Err() != nil {
-		prom.Incr(redisGet, key, result.Err().Error())
+		prometheus.Incr(redisGet, getKeyPerfix(key), result.Err().Error())
 	} else {
-		prom.Incr(redisGet, key, OPTION_SUC)
+		prometheus.Incr(redisGet, getKeyPerfix(key), OPTION_SUC)
 	}
-	prom.Timing(redisGet, int64(time.Since(getStartTime)/time.Millisecond), key)
-	prom.StateIncr(redisGet, key)
+	prometheus.Timing(redisGet, time.Since(getStartTime).Seconds(), getKeyPerfix(key))
+	prometheus.StateIncr(redisGet, getKeyPerfix(key))
 	return result
 }
 
@@ -114,12 +121,12 @@ func (rds *Client) ZSet(key string, value interface{}, expiration time.Duration)
 
 	result := rds.client.Set(key, value, expiration)
 	if result.Err() != nil {
-		prom.Incr(redisSet, key, result.Err().Error())
+		prometheus.Incr(redisSet, getKeyPerfix(key), result.Err().Error())
 	} else {
-		prom.Incr(redisSet, key, OPTION_SUC)
+		prometheus.Incr(redisSet, getKeyPerfix(key), OPTION_SUC)
 	}
-	prom.Timing(redisSet, int64(time.Since(getStartTime)/time.Millisecond), key)
-	prom.StateIncr(redisSet, key)
+	prometheus.Timing(redisSet, time.Since(getStartTime).Seconds(), getKeyPerfix(key))
+	prometheus.StateIncr(redisSet, getKeyPerfix(key))
 	return result
 }
 
@@ -127,12 +134,12 @@ func (rds *Client) ZDel(key string) *redis.IntCmd {
 	getStartTime := time.Now()
 	result := rds.client.Del(key)
 	if result.Err() != nil {
-		prom.Incr(redisDel, key, result.Err().Error())
+		prometheus.Incr(redisDel, getKeyPerfix(key), result.Err().Error())
 	} else {
-		prom.Incr(redisDel, key, OPTION_SUC)
+		prometheus.Incr(redisDel, getKeyPerfix(key), OPTION_SUC)
 	}
-	prom.Timing(redisDel, int64(time.Since(getStartTime)/time.Millisecond), key)
-	prom.StateIncr(redisDel, key)
+	prometheus.Timing(redisDel, time.Since(getStartTime).Seconds(), getKeyPerfix(key))
+	prometheus.StateIncr(redisDel, getKeyPerfix(key))
 	return result
 }
 
@@ -140,12 +147,12 @@ func (rds *Client) ZIncr(key string) *redis.IntCmd {
 	getStartTime := time.Now()
 	result := rds.client.Incr(key)
 	if result.Err() != nil {
-		prom.Incr(redisIncr, key, result.Err().Error())
+		prometheus.Incr(redisIncr, getKeyPerfix(key), result.Err().Error())
 	} else {
-		prom.Incr(redisIncr, key, OPTION_SUC)
+		prometheus.Incr(redisIncr, getKeyPerfix(key), OPTION_SUC)
 	}
-	prom.Timing(redisIncr, int64(time.Since(getStartTime)/time.Millisecond), key)
-	prom.StateIncr(redisIncr, key)
+	prometheus.Timing(redisIncr, time.Since(getStartTime).Seconds(), getKeyPerfix(key))
+	prometheus.StateIncr(redisIncr, getKeyPerfix(key))
 	return result
 }
 
@@ -153,12 +160,12 @@ func (rds *Client) ZTTL(key string) *redis.DurationCmd {
 	getStartTime := time.Now()
 	result := rds.client.TTL(key)
 	if result.Err() != nil {
-		prom.Incr(redisTtl, key, result.Err().Error())
+		prometheus.Incr(redisTtl, getKeyPerfix(key), result.Err().Error())
 	} else {
-		prom.Incr(redisTtl, key, OPTION_SUC)
+		prometheus.Incr(redisTtl, getKeyPerfix(key), OPTION_SUC)
 	}
-	prom.Timing(redisTtl, int64(time.Since(getStartTime)/time.Millisecond), key)
-	prom.StateIncr(redisTtl, key)
+	prometheus.Timing(redisTtl, time.Since(getStartTime).Seconds(), getKeyPerfix(key))
+	prometheus.StateIncr(redisTtl, getKeyPerfix(key))
 	return result
 }
 
@@ -166,12 +173,12 @@ func (rds *Client) ZSetRange(key string, offset int64, value string) *redis.IntC
 	getStartTime := time.Now()
 	result := rds.client.SetRange(key, offset, value)
 	if result.Err() != nil {
-		prom.Incr(redisTtl, key, result.Err().Error())
+		prometheus.Incr(redisTtl, getKeyPerfix(key), result.Err().Error())
 	} else {
-		prom.Incr(redisTtl, key, OPTION_SUC)
+		prometheus.Incr(redisTtl, getKeyPerfix(key), OPTION_SUC)
 	}
-	prom.Timing(redisTtl, int64(time.Since(getStartTime)/time.Millisecond), key)
-	prom.StateIncr(redisTtl, key)
+	prometheus.Timing(redisTtl, time.Since(getStartTime).Seconds(), getKeyPerfix(key))
+	prometheus.StateIncr(redisTtl, getKeyPerfix(key))
 	return result
 }
 
@@ -179,12 +186,12 @@ func (rds *Client) ZSetNX(key string, value interface{}, expiration time.Duratio
 	getStartTime := time.Now()
 	result := rds.client.SetNX(key, value, expiration)
 	if result.Err() != nil {
-		prom.Incr(redisSetNx, key, result.Err().Error())
+		prometheus.Incr(redisSetNx, getKeyPerfix(key), result.Err().Error())
 	} else {
-		prom.Incr(redisSetNx, key, OPTION_SUC)
+		prometheus.Incr(redisSetNx, getKeyPerfix(key), OPTION_SUC)
 	}
-	prom.Timing(redisSetNx, int64(time.Since(getStartTime)/time.Millisecond), key)
-	prom.StateIncr(redisSetNx, key)
+	prometheus.Timing(redisSetNx, time.Since(getStartTime).Seconds(), getKeyPerfix(key))
+	prometheus.StateIncr(redisSetNx, getKeyPerfix(key))
 	return result
 }
 
@@ -192,12 +199,12 @@ func (rds *Client) ZExpire(key string, expiration time.Duration) *redis.BoolCmd 
 	getStartTime := time.Now()
 	result := rds.client.Expire(key, expiration)
 	if result.Err() != nil {
-		prom.Incr(redisExpire, key, result.Err().Error())
+		prometheus.Incr(redisExpire, getKeyPerfix(key), result.Err().Error())
 	} else {
-		prom.Incr(redisExpire, key, OPTION_SUC)
+		prometheus.Incr(redisExpire, getKeyPerfix(key), OPTION_SUC)
 	}
-	prom.Timing(redisExpire, int64(time.Since(getStartTime)/time.Millisecond), key)
-	prom.StateIncr(redisExpire, key)
+	prometheus.Timing(redisExpire, time.Since(getStartTime).Seconds(), getKeyPerfix(key))
+	prometheus.StateIncr(redisExpire, getKeyPerfix(key))
 	return result
 }
 
@@ -205,11 +212,20 @@ func (rds *Client) ZExists(key string) *redis.IntCmd {
 	getStartTime := time.Now()
 	result := rds.client.Exists(key)
 	if result.Err() != nil {
-		prom.Incr(redisExist, key, result.Err().Error())
+		prometheus.Incr(redisExist, getKeyPerfix(key), result.Err().Error())
 	} else {
-		prom.Incr(redisExist, key, OPTION_SUC)
+		prometheus.Incr(redisExist, getKeyPerfix(key), OPTION_SUC)
 	}
-	prom.Timing(redisExist, int64(time.Since(getStartTime)/time.Millisecond), key)
-	prom.StateIncr(redisExist, key)
+	prometheus.Timing(redisExist, time.Since(getStartTime).Seconds(), getKeyPerfix(key))
+	prometheus.StateIncr(redisExist, getKeyPerfix(key))
 	return result
+}
+
+func getKeyPerfix(key string) string {
+	var keys []string
+	keys = strings.Split(key, ":")
+	if len(keys) > 0 {
+		keys = keys[:len(keys)-1]
+	}
+	return strings.Join(keys, "")
 }

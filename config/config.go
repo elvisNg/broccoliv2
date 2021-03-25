@@ -82,17 +82,18 @@ type Redis struct {
 }
 
 type Mysql struct {
-	Host            string        `json:"host"`
-	User            string        `json:"user"`
-	Pwd             string        `json:"pwd"`
-	DataSourceName  string        `json:"datasourcename"`
-	CharSet         string        `json:"charset"`
-	ParseTime       bool          `json:"parse_time"`
-	ConnMaxLifetime time.Duration `json:"conn_max_lifetime"`
-	MaxIdleConns    int           `json:"max_idle_conns"`
-	MaxOpenConns    int           `json:"max_oepn_conns"`
-	Enable          bool          `json:"enable"` // 启用组件
-	Debug           bool          `json:"debug"`  // 启用mysql日志
+	Host                 string        `json:"host"`
+	User                 string        `json:"user"`
+	Pwd                  string        `json:"pwd"`
+	DataSourceName       string        `json:"datasourcename"`
+	CharSet              string        `json:"charset"`
+	ParseTime            bool          `json:"parse_time"`
+	ConnMaxLifetime      time.Duration `json:"conn_max_lifetime"`
+	MaxIdleConns         int           `json:"max_idle_conns"`
+	MaxOpenConns         int           `json:"max_oepn_conns"`
+	Enable               bool          `json:"enable"` // 启用组件
+	Debug                bool          `json:"debug"`  // 启用mysql日志
+	UpdateSkipPrimaryKey bool          `json:"update_skip_primary_key"`
 }
 
 type Prometheus struct {
@@ -102,8 +103,8 @@ type Prometheus struct {
 
 // pprof config
 type PProf struct {
-    HostURI    string     `json:"host_uri"`
-    Enable     bool    `json:"enable"`
+	HostURI string `json:"host_uri"`
+	Enable  bool   `json:"enable"`
 }
 
 type EBus struct {

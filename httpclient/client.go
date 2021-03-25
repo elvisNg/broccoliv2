@@ -14,6 +14,8 @@ import (
 	"strconv"
 	"time"
 
+	"github.com/antonmedv/expr"
+	"github.com/antonmedv/expr/vm"
 	"github.com/elvisNg/broccoliv2/config"
 	broccolictx "github.com/elvisNg/broccoliv2/context"
 	"github.com/elvisNg/broccoliv2/errors"
@@ -23,6 +25,7 @@ import (
 	"github.com/elvisNg/broccoliv2/utils"
 	"github.com/opentracing/opentracing-go"
 	"github.com/opentracing/opentracing-go/ext"
+	"github.com/tidwall/gjson"
 )
 
 const (
@@ -32,7 +35,8 @@ const (
 
 var (
 	httpclientInstance = make(map[string]*Client)
-	prom               *broccoliprometheus.Prom
+	prom               **broccoliprometheus.Prom
+	prometheus         = broccoliprometheus.NewProm()
 )
 
 type httpClientSettings struct {
@@ -44,9 +48,13 @@ type httpClientSettings struct {
 }
 
 type Client struct {
-	client   *http.Client
-	settings httpClientSettings
-	retrier  Retriable
+	client         *http.Client
+	settings       httpClientSettings
+	retrier        Retriable
+	instanceName   string
+	assertJSONPath string
+	assertExpr     *vm.Program
+	errCodePath    string
 }
 
 func InitHttpClientConf(conf map[string]config.HttpClientConf) {
@@ -61,8 +69,11 @@ func InitHttpClientConf(conf map[string]config.HttpClientConf) {
 	return
 }
 
-func InitHttpClientConfWithPorm(conf map[string]config.HttpClientConf, promClient *broccoliprometheus.Prom) {
-	prom = promClient
+func InitHttpClientConfWithPorm(conf map[string]config.HttpClientConf, promClient **broccoliprometheus.Prom) {
+	if promClient != nil {
+		prom = promClient
+		prometheus = *prom
+	}
 	var tmpInstanceMap = make(map[string]*Client)
 	for instanceName, httpClientConf := range conf {
 		if v, ok := httpclientInstance[instanceName]; ok {
@@ -173,16 +184,29 @@ func newClient(cfg *config.HttpClientConf) *Client {
 			Transport: &settings.Transport,
 			Timeout:   settings.Timeout,
 		},
-		settings: settings,
-		retrier:  retrier,
+		settings:     settings,
+		retrier:      retrier,
+		instanceName: cfg.InstanceName,
+		errCodePath:  cfg.ErrCodePath,
 	}
+
+	// if len(cfg.AssertJSONPath) > 0 && len(cfg.AssertExpr) > 0 {
+	// 	program, err := expr.Compile(cfg.AssertExpr)
+	// 	if err != nil {
+	// 		panic(err)
+	// 	}
+
+	// 	client.assertJSONPath = cfg.AssertJSONPath
+	// 	client.assertExpr = program
+	// }
+
 	return &client
 }
 
 func httpClientStatus(url string, start time.Time, statusCode string) {
-	prom.Timing(url, int64(time.Since(start)/time.Millisecond))
-	prom.Incr(url, statusCode)
-	prom.StateIncr(url)
+	prometheus.Timing("-", time.Since(start).Seconds(), url)
+	prometheus.Incr("-", url, statusCode, "-")
+	prometheus.StateIncr(url)
 }
 
 func (c *Client) Get(ctx context.Context, url string, headers map[string]string) ([]byte, error) {
@@ -236,7 +260,8 @@ func (c *Client) getRandomHost() string {
 
 func (c *Client) do(ctx context.Context, request *http.Request, headers map[string]string) (rsp []byte, err error) {
 	var now = time.Now()
-	var code string
+	var statusCode string = "-"
+	var errCode string = "-"
 	if len(headers) > 0 {
 		for k, v := range headers {
 			request.Header.Add(k, v)
@@ -247,13 +272,8 @@ func (c *Client) do(ctx context.Context, request *http.Request, headers map[stri
 	loger := broccolictx.ExtractLogger(ctx)
 	tracer := tracing.NewTracerWrap(opentracing.GlobalTracer())
 	defer func() {
-		pubProm, err := broccolictx.ExtractPrometheus(ctx)
-		if pubProm != nil && err == nil {
-			pubProm.HTTPClient.Timing(request.URL.Path, int64(time.Since(now)/time.Millisecond))
-			if code != "" {
-				pubProm.HTTPClient.Incr(request.URL.Path, code)
-			}
-		}
+		prometheus.Timing(c.instanceName, time.Since(now).Seconds(), request.URL.Path)
+		prometheus.Incr(c.instanceName, request.URL.Path, statusCode, errCode)
 	}()
 	name := request.URL.RawPath
 	ctx, span, _ := tracer.StartSpanFromContext(ctx, name)
@@ -264,9 +284,10 @@ func (c *Client) do(ctx context.Context, request *http.Request, headers map[stri
 			return
 		}
 		span.Finish()
-		if prom != nil {
-			httpClientStatus(request.URL.Path, now, code)
-		}
+		// FIXME: do we need this??
+		// if prom != nil {
+		// 	httpClientStatus(request.URL.Path, now, code)
+		// }
 	}()
 
 	var bodyReader *bytes.Reader
@@ -311,7 +332,7 @@ func (c *Client) do(ctx context.Context, request *http.Request, headers map[stri
 	if response == nil {
 		return nil, err
 	}
-	code = strconv.Itoa(response.StatusCode)
+	statusCode = strconv.Itoa(response.StatusCode)
 	defer response.Body.Close()
 	rspBody, err := ioutil.ReadAll(response.Body)
 	span.SetTag("httpclient response.status", response.StatusCode)
@@ -322,5 +343,47 @@ func (c *Client) do(ctx context.Context, request *http.Request, headers map[stri
 		return nil, err
 	}
 
+	// if c.assertExpr != nil && strings.HasPrefix(response.Header.Get("Content-type"), "application/json") {
+	// if c.assertExpr != nil {
+	// 	ret, err := c.assertRespJSONValue(ctx, rspBody)
+	// 	if err != nil {
+	// 		errCode = err.Error()
+	// 	} else {
+	// 		if ret {
+	// 			errCode = "OK"
+	// 		} else {
+	// 			errCode = "ERR"
+	// 		}
+	// 	}
+	// }
+	if c.errCodePath != "" {
+		errCode = c.extractJSONErrCode(ctx, rspBody)
+	}
+
 	return rspBody, err
+}
+
+func (c *Client) extractJSONErrCode(ctx context.Context, rspBody []byte) string {
+	jsonStr := string(rspBody)
+	return gjson.Get(jsonStr, c.errCodePath).String()
+}
+
+func (c *Client) assertRespJSONValue(ctx context.Context, rspBody []byte) (bool, error) {
+	logger := broccolictx.ExtractLogger(ctx)
+
+	jsonStr := string(rspBody)
+
+	value := gjson.Get(jsonStr, c.assertJSONPath)
+
+	out, err := expr.Run(c.assertExpr, map[string]interface{}{"value": value})
+	if err != nil {
+		logger.Errorf("httpclient[%s] expr.Run error:%+v", c.instanceName, err)
+		return false, fmt.Errorf("EXPR_ERROR")
+	}
+	ret, ok := out.(bool)
+	if !ok {
+		panic("httpclient expr ret is not bool")
+	}
+
+	return ret, nil
 }

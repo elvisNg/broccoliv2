@@ -3,8 +3,6 @@ package mysqlclient
 import (
 	"fmt"
 	"log"
-	"strconv"
-	"strings"
 	"sync"
 	"time"
 
@@ -15,17 +13,14 @@ import (
 )
 
 var (
-	prometheus   *broccoliprometheus.Prom
 	interceptors []Interceptor
+	prom         **broccoliprometheus.Prom
+	prometheus   = broccoliprometheus.NewProm()
 )
 
 const (
-	driverName   = "mysql"
-	createOption = "create"
-	updateOption = "update"
-	delOption    = "delete"
-	findOption   = "find"
-	TypeGorm     = "gorm"
+	driverName = "mysql"
+	TypeGorm   = "gorm"
 )
 
 type DataSource struct {
@@ -41,31 +36,68 @@ type DataSource struct {
 }
 
 type Client struct {
-	client *gorm.DB
-	rw     sync.RWMutex
+	client   *gorm.DB
+	rw       sync.RWMutex
+	stopChan chan int
+}
+
+func newClient() *Client {
+	return &Client{
+		client:   nil,
+		stopChan: make(chan int, 1),
+	}
 }
 
 func (dbs *Client) Reload(cfg *conf.Mysql) {
 	dbs.rw.Lock()
 	defer dbs.rw.Unlock()
+	dbs.Close()
+	log.Printf("[redis.Reload] redisclient reload with new conf: %+v\n", cfg)
+	dbs.initClient(cfg)
+}
+
+func (dbs *Client) initClient(cfg *conf.Mysql) {
+	db := newMysqlClient(cfg, prometheus)
+	if db == nil {
+		return
+	}
+	dbs.client = db
+
+	// 监听修复BadConnections
+	go func() {
+		ticker := time.NewTicker(2 * time.Second)
+		for {
+			select {
+			case <-ticker.C:
+				if err := dbs.client.DB().Ping(); err != nil {
+					fmt.Printf("mysql gorm ping err(%+v)\n", err)
+				}
+			case <-dbs.stopChan:
+				ticker.Stop()
+				return
+			}
+		}
+	}()
+}
+
+func (dbs *Client) Close() {
 	if err := dbs.client.Close(); err != nil {
 		log.Printf("redis close failed: %s\n", err.Error())
 		return
 	}
-	log.Printf("[redis.Reload] redisclient reload with new conf: %+v\n", cfg)
-	dbs.client = newMysqlClient(cfg)
 }
 
-func InitClientWithProm(sqlconf *conf.Mysql, promClient *broccoliprometheus.Prom) *Client {
-	prometheus = promClient
-	mysql := new(Client)
-	mysql.client = newMysqlClient(sqlconf)
+func InitClientWithProm(sqlconf *conf.Mysql, promClient **broccoliprometheus.Prom) *Client {
+	mysql := newClient()
+	mysql.initClient(sqlconf)
+	prom = promClient
+	prometheus = *prom
 	return mysql
 }
 
 func InitClient(sqlconf *conf.Mysql) *Client {
-	mysql := new(Client)
-	mysql.client = newMysqlClient(sqlconf)
+	mysql := newClient()
+	mysql.initClient(sqlconf)
 	return mysql
 }
 
@@ -73,82 +105,23 @@ func (dbs *Client) GetCli() *gorm.DB {
 	return dbs.client
 }
 
-func (dbs *Client) ZCreate(value interface{}) *gorm.DB {
-	sqlStartTime := time.Now()
-	_db := dbs.client.Create(value)
-	sql := strings.Join([]string{createOption, value.(string)}, ":")
-	prometheus.Timing(sql, int64(time.Since(sqlStartTime)/time.Millisecond), strconv.Itoa(int(_db.RowsAffected)))
-	prometheus.Incr(sql, _db.Error.Error())
-	prometheus.StateIncr(sql, createOption)
-	return _db
-}
-
-func (dbs *Client) ZUpdate(attrs ...interface{}) *gorm.DB {
-	sqlStartTime := time.Now()
-	_db := dbs.client.Update(attrs)
-	sql := updateOption
-	for _, attr := range attrs {
-		sql = strings.Join([]string{updateOption, attr.(string)}, ":")
-	}
-	prometheus.Timing(sql, int64(time.Since(sqlStartTime)/time.Millisecond), strconv.Itoa(int(_db.RowsAffected)))
-	prometheus.Incr(sql, _db.Error.Error())
-	prometheus.StateIncr(sql, updateOption)
-	return _db
-}
-
-func (dbs *Client) ZDelete(value interface{}, where ...interface{}) *gorm.DB {
-	sqlStartTime := time.Now()
-	_db := dbs.client.Delete(value, where)
-	sql := strings.Join([]string{delOption, value.(string)}, ":")
-	for _, w := range where {
-		sql = strings.Join([]string{sql, w.(string)}, ":")
-	}
-	prometheus.Timing(sql, int64(time.Since(sqlStartTime)/time.Millisecond), strconv.Itoa(int(_db.RowsAffected)))
-	prometheus.Incr(sql, _db.Error.Error())
-	prometheus.StateIncr(sql, delOption)
-	return _db
-}
-
-func (dbs *Client) ZFind(out interface{}, where ...interface{}) *gorm.DB {
-	sqlStartTime := time.Now()
-	_db := dbs.client.Find(out, where)
-	sql := strings.Join([]string{findOption, out.(string)}, ":")
-	for _, w := range where {
-		sql = strings.Join([]string{sql, w.(string)}, ":")
-	}
-	prometheus.Timing(sql, int64(time.Since(sqlStartTime)/time.Millisecond), strconv.Itoa(int(_db.RowsAffected)))
-	prometheus.Incr(sql, _db.Error.Error())
-	prometheus.StateIncr(sql, findOption)
-	return _db
-}
-
-func newMysqlClient(cfg *conf.Mysql) *gorm.DB {
+func newMysqlClient(cfg *conf.Mysql, prometheus *broccoliprometheus.Prom) *gorm.DB {
+	_db, err := open(cfg, prometheus)
 	if prometheus != nil {
 		interceptors = make([]Interceptor, 0)
 		interceptors = append(interceptors, metricInterceptor)
 	}
-	_db, err := open(cfg)
 	if err != nil {
 		prometheus.Incr(TypeGorm, cfg.DataSourceName+".ping", cfg.Host, "open err")
 		fmt.Printf("")
 		log.Printf("mysql open err (%+v) , table_(%s)", err.Error(), cfg.DataSourceName+"."+".ping")
 		return _db
 	}
-
-	// 监听修复BadConnections
-	go func() {
-		for {
-			if err := _db.DB().Ping(); err != nil {
-				println("mysql gorm ping err(%+v) ", err)
-			}
-			time.Sleep(2 * time.Second)
-		}
-	}()
 	return _db
 }
 
 // open ... with interceptors
-func open(cfg *conf.Mysql) (*gorm.DB, error) {
+func open(cfg *conf.Mysql, prometheus *broccoliprometheus.Prom) (*gorm.DB, error) {
 	url := "%v:%v@(%v)/%v?charset=%v&parseTime=%v&loc=Local"
 	//user:password@/dbname?charset=utf8&parseTime=True&loc=Local
 	host := cfg.Host
@@ -171,6 +144,22 @@ func open(cfg *conf.Mysql) (*gorm.DB, error) {
 	_db.DB().SetMaxOpenConns(cfg.MaxOpenConns)
 	_db.DB().SetMaxIdleConns(cfg.MaxIdleConns)
 	_db.DB().SetConnMaxLifetime(cfg.ConnMaxLifetime)
+
+	//禁止更新primary key
+	if cfg.UpdateSkipPrimaryKey {
+		_db.Callback().Update().Before("gorm:assign_updating_attributes").Register("update:skip_primarykey", func(scope *gorm.Scope) {
+			pkey := scope.PrimaryKey()
+			//println(fmt.Sprintf("primary key:'%s'", pkey))
+			if len(pkey) > 0 {
+				omitAttrs := scope.OmitAttrs()
+				omitAttrs = append(omitAttrs, pkey)
+				scope.Search = scope.Search.Omit(omitAttrs...)
+			}
+		})
+	}
+	if prometheus == nil {
+		return _db, err
+	}
 
 	replace := func(processor func() *gorm.CallbackProcessor, callbackName string, interceptors ...Interceptor) {
 		old := processor().Get(callbackName)

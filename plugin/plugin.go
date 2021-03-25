@@ -25,7 +25,6 @@ import (
 	broccoliredis "github.com/elvisNg/broccoliv2/redis"
 	"github.com/elvisNg/broccoliv2/redis/zredis"
 	"github.com/elvisNg/broccoliv2/sequence"
-	"github.com/elvisNg/broccoliv2/tifclient"
 	tracing "github.com/elvisNg/broccoliv2/trace"
 	"github.com/elvisNg/broccoliv2/trace/zipkin"
 )
@@ -65,12 +64,11 @@ func (c *Container) Init(appcfg *config.AppConf) {
 	c.initAccessLogger(&appcfg.AccessLog)
 	c.initTracer(&appcfg.Trace)
 	c.initMongo(&appcfg.MongoDB)
-	c.initTifClient(appcfg)
 	c.initPrometheus(&appcfg.Prometheus)
 	if appcfg.Prometheus.Enable {
-		c.initMysqlWithProm(&appcfg.Mysql, c.prometheus.GetPubCli().DbClient)
-		c.initRedisWithProm(&appcfg.Redis, c.prometheus.GetPubCli().CacheClient)
-		c.initHttpClientWithProm(appcfg.HttpClient, c.prometheus.GetPubCli().HTTPClient)
+		c.initMysqlWithProm(&appcfg.Mysql, &c.prometheus.GetPubCli().DbClient)
+		c.initRedisWithProm(&appcfg.Redis, &c.prometheus.GetPubCli().CacheClient)
+		c.initHttpClientWithProm(appcfg.HttpClient, &c.prometheus.GetPubCli().HTTPClient)
 	} else {
 		c.initMysql(&appcfg.Mysql)
 		c.initRedis(&appcfg.Redis)
@@ -83,6 +81,9 @@ func (c *Container) Init(appcfg *config.AppConf) {
 
 func (c *Container) Reload(appcfg *config.AppConf) {
 	log.Println("[Container.Reload] start")
+	if c.appcfg.Prometheus != appcfg.Prometheus {
+		c.reloadPrometheus(&appcfg.Prometheus)
+	}
 	if c.appcfg.LogConf != appcfg.LogConf {
 		c.reloadLogger(&appcfg.LogConf)
 	}
@@ -99,7 +100,6 @@ func (c *Container) Reload(appcfg *config.AppConf) {
 		c.reloadMysql(&appcfg.Mysql)
 	}
 	c.reloadRedis(&appcfg.Redis)
-	c.initTifClient(appcfg)
 	c.initHttpClient(appcfg.HttpClient)
 	if c.appcfg.GoPS != appcfg.GoPS {
 		c.reloadGoPS(&appcfg.GoPS)
@@ -109,7 +109,7 @@ func (c *Container) Reload(appcfg *config.AppConf) {
 }
 
 // MysqlWithProm
-func (c *Container) initRedisWithProm(cfg *config.Redis, promClient *broccoliprometheus.Prom) {
+func (c *Container) initRedisWithProm(cfg *config.Redis, promClient **broccoliprometheus.Prom) {
 	if cfg.Enable {
 		if cfg.ClusterEnable {
 			c.redis = broccoliredis.InitClusterClient(cfg)
@@ -155,7 +155,7 @@ func (c *Container) GetRedisCli() zredis.Redis {
 }
 
 // MysqlWithProm
-func (c *Container) initMysqlWithProm(cfg *config.Mysql, promClient *broccoliprometheus.Prom) {
+func (c *Container) initMysqlWithProm(cfg *config.Mysql, promClient **broccoliprometheus.Prom) {
 	if cfg.Enable {
 		c.mysql = broccolimysql.InitClient(cfg)
 	}
@@ -197,6 +197,19 @@ func (c *Container) initPrometheus(cfg *config.Prometheus) {
 }
 func (c *Container) GetPrometheus() zprometheus.Prometheus {
 	return c.prometheus
+}
+
+//Prometheus
+func (c *Container) reloadPrometheus(cfg *config.Prometheus) {
+	if cfg.Enable {
+		if c.prometheus.GetPubCli() != nil && c.prometheus.GetPubCli() != nil {
+			c.prometheus.Enable()
+		} else {
+			c.prometheus = broccoliprometheus.InitClient(cfg)
+		}
+	} else if c.prometheus.GetPubCli() != nil && c.prometheus.GetPubCli() != nil {
+		c.prometheus.Disable()
+	}
 }
 
 // GoMicroClient
@@ -375,11 +388,6 @@ func (c *Container) GetMongo() zmongo.Mongo {
 	return c.mongo
 }
 
-// tifclient
-func (c *Container) initTifClient(appconf *config.AppConf) {
-	tifclient.InitClient(appconf)
-}
-
 // httpclient
 func (c *Container) initHttpClient(conf map[string]config.HttpClientConf) {
 	flag := c.appcfg.Trace.OnlyLogErr
@@ -391,12 +399,18 @@ func (c *Container) initHttpClient(conf map[string]config.HttpClientConf) {
 }
 
 //initHttpClientWithProm
-func (c *Container) initHttpClientWithProm(conf map[string]config.HttpClientConf, promClient *broccoliprometheus.Prom) {
+func (c *Container) initHttpClientWithProm(conf map[string]config.HttpClientConf, promClient **broccoliprometheus.Prom) {
 	flag := c.appcfg.Trace.OnlyLogErr
 	for _, v := range conf {
 		v.TraceOnlyLogErr = flag
 	}
-	httpclient.InitHttpClientConfWithPorm(conf, promClient)
+
+	if promClient != nil {
+		httpclient.InitHttpClientConfWithPorm(conf, promClient)
+	} else {
+		httpclient.InitHttpClientConf(conf)
+	}
+
 	c.httpClient = httpclient.DefaultClient()
 
 }

@@ -10,6 +10,7 @@ replace (
 
 require (
 	github.com/Shopify/sarama v1.24.1
+	github.com/antonmedv/expr v1.8.9
 	github.com/coreos/etcd v3.3.17+incompatible
 	github.com/coreos/go-systemd v0.0.0-20191104093116-d3cd4ed1dbcf // indirect
 	github.com/elazarl/go-bindata-assetfs v1.0.0
@@ -46,6 +47,7 @@ require (
 	github.com/sirupsen/logrus v1.4.2
 	github.com/streadway/amqp v0.0.0-20190404075320-75d898a42a94
 	github.com/tebeka/strftime v0.1.3 // indirect
+	github.com/tidwall/gjson v1.7.1
 	go.mongodb.org/mongo-driver v1.0.2
 	go.uber.org/ratelimit v0.1.0
 	go.uber.org/zap v1.12.0
