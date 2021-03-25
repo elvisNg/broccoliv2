@@ -151,6 +151,9 @@ type HttpClientConf struct {
 	MaxConnsPerHost       int           `json:"max_conns_per_host"`
 	IdleConnTimeout       time.Duration `json:"idle_conn_timeout"`
 	TraceOnlyLogErr       bool
+	AssertJSONPath        string `json:"assert_json_path"`
+	AssertExpr            string `json:"assert_expr"`
+	ErrCodePath           string `json:"err_code_path"`
 }
 
 type Obs struct {
